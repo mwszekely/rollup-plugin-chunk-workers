@@ -8,12 +8,12 @@ Works with `@rollup/plugin-typescript`. Like with regular Typescript you would w
 
 Supported transformations:
 
-* `new Worker("StringLiteral")`
-* `[ctx.]audioWorklet.addModule("StringLiteral")`
-* `[CSS.]paintWorklet.addModule("StringLiteral")`
-* `[navigator.]serviceWorker.register("StringLiteral")`
+* `new Worker(new URL("StringLiteral", import.meta.url))`
+* `[ctx.]audioWorklet.addModule(new URL("StringLiteral", import.meta.url))`
+* `[CSS.]paintWorklet.addModule(new URL("StringLiteral", import.meta.url))`
+* `[navigator.]serviceWorker.register(new URL("StringLiteral", import.meta.url))`
 
-Replacing is done by analyzing the file's AST. The benefit is that if any of these constructs appear in a comment or a string, they won't be transformed there. It does mean that variations such as `new (() => { return globalThis })().Worker("StringLiteral")`, or any path to a module that's not a static `"StringLiteral"`, will not be transformed. `Worker` or `SharedWorker` must be unprefixed, and `audioWorklet`/`paintWorklet`/`serviceWorker` cannot be renamed.
+Replacing is done by analyzing the file's AST. The benefit is that if any of these constructs appear in a comment or a string, they won't be transformed there. It does mean that variations such as `new (() => { return globalThis })().Worker(...)`, or any path to a module that's not a static `"StringLiteral"`, will not be transformed. `Worker`/`SharedWorker`/`URL` must be unprefixed, and `audioWorklet`/`paintWorklet`/`serviceWorker` cannot be renamed.
 
 Use-case of this plugin: 
 
