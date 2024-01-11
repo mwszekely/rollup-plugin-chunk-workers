@@ -4,24 +4,33 @@ import { simple } from "acorn-walk";
 import { CallExpression, Expression, Identifier, Literal, MemberExpression, NewExpression, SpreadElement } from "estree";
 import MagicString from "magic-string";
 import { relative } from "path";
-import { AcornNode, InputPluginOption } from "rollup";
+import { AstNode as AcornNode, InputPluginOption } from "rollup";
 
-export interface DataPluginOptions {
+export interface ChunkWorkersPluginOptions {
 
     /**
-     * Files prefixed with `datafile:` will always be included, but this can be used to load files even if they don't.
+     * Standard Rollup `include` pattern; applies to the string in `new URL("./worker.js")`.
      */
     include?: FilterPattern;
 
     /**
-     * Excludes any files that were included by `include` (has no effect on `datafile:` ids)
+     * Standard Rollup `exclude` pattern; applies to the string in `new URL("./worker.js")`.
      */
     exclude?: FilterPattern;
+
+    /**
+     * If provided, allows renaming a file to be different from whatever it was imported as.
+     * 
+     * This is particularly useful for changing the directory something is in once built.
+     * 
+     * E.G. `p => path.parse(p).base` will place everything in the build's root directory (with `import * as path from "node:path"`).
+     */
+    transformPath?: (normalizedPath: string) => string;
 }
 
 const PLUGIN_NAME = "rollup-plugin-chunk-workers";
 
-function parseAddModuleOrNewWorker(ast: AcornNode, callbackOnArgs: (args: (Expression | SpreadElement)[]) => void) {
+function findWorkerChunkExpressions(ast: AcornNode, callbackOnArgs: (args: (Expression | SpreadElement)[]) => void) {
     simple(ast!, {
         "CallExpression": (node) => {
             // This is a function call.
@@ -40,13 +49,6 @@ function parseAddModuleOrNewWorker(ast: AcornNode, callbackOnArgs: (args: (Expre
                             // It's a call to create a worklet/service worker.
                             // But is it in the right format?
                             callbackOnArgs(exp.arguments);
-                            /*const urlArg = exp.arguments[0];
-                            if (urlArg.type == "Literal") {
-                                const url = `${(urlArg as Literal).value}`;
-                                const urlStart = (exp.arguments[0] as never as Node).start;   // What are these types???
-                                const urlEnd = (exp.arguments[0] as never as Node).end;
-                                filesToEmit.push({ url, urlStart, urlEnd })
-                            }*/
                         }
                     }
                 }
@@ -65,9 +67,6 @@ function parseAddModuleOrNewWorker(ast: AcornNode, callbackOnArgs: (args: (Expre
                     if (exp.arguments.length >= 1) {
                         // Looking more like a "new Worker" expression...
                         // Is it in the right format?
-                        //url = `${exp.arguments[0].value}`;
-                        //urlStart = (exp.arguments[0] as never as Node).start;   // What are these types???
-                        //urlEnd = (exp.arguments[0] as never as Node).end;
                         switch (exp.callee.name) {
                             case "Worker":
                                 type = "Worker";
@@ -78,8 +77,6 @@ function parseAddModuleOrNewWorker(ast: AcornNode, callbackOnArgs: (args: (Expre
                         }
                         if (type) {
                             callbackOnArgs(exp.arguments);
-                            // Definitely a "new Worker" expression
-                            //filesToEmit.push({ url, urlStart, urlEnd });
                         }
                     }
                     break;
@@ -88,10 +85,13 @@ function parseAddModuleOrNewWorker(ast: AcornNode, callbackOnArgs: (args: (Expre
     })
 }
 
-export default function chunkWorkersPlugin({ exclude, include }: Partial<DataPluginOptions> = {}): InputPluginOption {
+export default function chunkWorkersPlugin({ exclude, include, transformPath }: Partial<ChunkWorkersPluginOptions> = {}): InputPluginOption {
+
+    transformPath ??= _ => _;
 
     let projectDir = process.cwd();
     const filter = createFilter(include, exclude);
+
     return {
         name: PLUGIN_NAME,
         async transform(code, id) {
@@ -99,42 +99,56 @@ export default function chunkWorkersPlugin({ exclude, include }: Partial<DataPlu
             if (filter(id)) {
                 try {
                     let magicString = new MagicString(code);
+
+                    // TODO: We need the AST...is this the best way to get it during the transform phase?
+                    // This feels rude.
                     const moduleInfo = this.getModuleInfo(id)!;
                     moduleInfo.ast = this.parse(code);
 
-                    let filesToEmit = new Array<{ url: string, urlStart: number, urlEnd: number }>();
+                    const filesToEmit: { url: string, replaceStart: number, replaceEnd: number }[] = [];
 
-                    parseAddModuleOrNewWorker(moduleInfo.ast!, (args) => {
+                    // Try to find potential expressions to replace.
+                    findWorkerChunkExpressions(moduleInfo.ast!, (args) => {
+                        // We've found one, potentially. 
+                        // Make sure it's in the right format.
+                        // In particular, by being in the right format we're able to use the URL
+                        // as the ID of a new chunk for Rollup to start compiling.
                         const urlArg = args[0];
                         if (urlArg.type == "NewExpression" && urlArg.callee.type == "Identifier" && (urlArg.callee as Identifier).name == 'URL') {
                             let newExp = (urlArg as NewExpression);
                             if (
-                                newExp.arguments.length == 2 && 
-                                newExp.arguments[0].type == "Literal" && 
+                                newExp.arguments.length == 2 &&
+                                newExp.arguments[0].type == "Literal" &&
                                 newExp.arguments[1].type == "MemberExpression") {
-                                    let relDir = newExp.arguments[0] as Literal;
-                                    let meta = newExp.arguments[1] as MemberExpression;
-                                    if (meta.object.type == "MetaProperty" && meta.property.type == "Identifier" && meta.property.name == "url") {
-                                        filesToEmit.push({
-                                            url: `${relDir.value}`,
-                                            urlStart: (newExp as never as Node).start,
-                                            urlEnd: (newExp as never as Node).end,
-                                        })
-                                    }
+                                let relDir = newExp.arguments[0] as Literal;
+                                let meta = newExp.arguments[1] as MemberExpression;
+                                if (meta.object.type == "MetaProperty" && meta.property.type == "Identifier" && meta.property.name == "url") {
+
+                                    // Right format -- add it to the list of files to emit.
+                                    const url = `${relDir.value}`;
+                                    const replaceStart = (newExp as never as Node).start;
+                                    const replaceEnd = (newExp as never as Node).end;
+
+                                    filesToEmit.push({ url, replaceStart, replaceEnd });
+                                }
                             }
                         }
                     });
-                    
-                    filesToEmit.forEach(({ url, urlStart, urlEnd }) => {
+
+                    filesToEmit.forEach(({ replaceEnd: urlEnd, replaceStart: urlStart, url }) => {
+                        const fileName2 = transformPath!(normalizePath(relative(projectDir, url!)));
+
+                        // Duplicates calls to emitFile are fine, the documentation says so
                         const fileId = this.emitFile({
                             type: "chunk",
                             id: url!,
-                            fileName: normalizePath(relative(projectDir, url!)),
+                            fileName: fileName2,
                             importer: id
                         });
                         const fileName = this.getFileName(fileId);
                         if (urlStart && urlEnd)
-                            magicString.update(urlStart, urlEnd, JSON.stringify(normalizePath(fileName)));
+                            magicString.update(urlStart, urlEnd, `new URL(${JSON.stringify(fileName)}, import.meta.url)`);
+
                     })
                     return {
                         code: magicString.toString(),

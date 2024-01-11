@@ -1,8 +1,12 @@
-import { w as wrap } from './comlink-6afeecc7.js';
+import { w as wrap } from './comlink-8vsNNwKO.js';
 
-const { Foo } = wrap(new Worker("workers/test.worker.js", { type: "module" }));
-let b = await new Foo();
-await b.bar();
+const wrapped = wrap(new Worker(new URL("test.worker.js", import.meta.url), { type: "module" }));
+debugger;
+let b = await new wrapped.Foo();
+const four = await b.bar();
+console.log(four);
+const c = {};
+("audioWorklet" in c && c.audioWorklet.addModule(new URL("test.worker.js", import.meta.url), {}));
 (async () => {
     const a = await Promise.all([]);
     console.log(a);

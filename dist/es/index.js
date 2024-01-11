@@ -4,7 +4,7 @@ import MagicString from 'magic-string';
 import { relative } from 'path';
 
 const PLUGIN_NAME = "rollup-plugin-chunk-workers";
-function parseAddModuleOrNewWorker(ast, callbackOnArgs) {
+function findWorkerChunkExpressions(ast, callbackOnArgs) {
     simple(ast, {
         "CallExpression": (node) => {
             // This is a function call.
@@ -20,13 +20,6 @@ function parseAddModuleOrNewWorker(ast, callbackOnArgs) {
                             // It's a call to create a worklet/service worker.
                             // But is it in the right format?
                             callbackOnArgs(exp.arguments);
-                            /*const urlArg = exp.arguments[0];
-                            if (urlArg.type == "Literal") {
-                                const url = `${(urlArg as Literal).value}`;
-                                const urlStart = (exp.arguments[0] as never as Node).start;   // What are these types???
-                                const urlEnd = (exp.arguments[0] as never as Node).end;
-                                filesToEmit.push({ url, urlStart, urlEnd })
-                            }*/
                         }
                     }
                 }
@@ -45,9 +38,6 @@ function parseAddModuleOrNewWorker(ast, callbackOnArgs) {
                     if (exp.arguments.length >= 1) {
                         // Looking more like a "new Worker" expression...
                         // Is it in the right format?
-                        //url = `${exp.arguments[0].value}`;
-                        //urlStart = (exp.arguments[0] as never as Node).start;   // What are these types???
-                        //urlEnd = (exp.arguments[0] as never as Node).end;
                         switch (exp.callee.name) {
                             case "Worker":
                                 type = "Worker";
@@ -58,8 +48,6 @@ function parseAddModuleOrNewWorker(ast, callbackOnArgs) {
                         }
                         if (type) {
                             callbackOnArgs(exp.arguments);
-                            // Definitely a "new Worker" expression
-                            //filesToEmit.push({ url, urlStart, urlEnd });
                         }
                     }
                     break;
@@ -67,7 +55,8 @@ function parseAddModuleOrNewWorker(ast, callbackOnArgs) {
         }
     });
 }
-function chunkWorkersPlugin({ exclude, include } = {}) {
+function chunkWorkersPlugin({ exclude, include, transformPath } = {}) {
+    transformPath !== null && transformPath !== void 0 ? transformPath : (transformPath = _ => _);
     let projectDir = process.cwd();
     const filter = createFilter(include, exclude);
     return {
@@ -76,10 +65,17 @@ function chunkWorkersPlugin({ exclude, include } = {}) {
             if (filter(id)) {
                 try {
                     let magicString = new MagicString(code);
+                    // TODO: We need the AST...is this the best way to get it during the transform phase?
+                    // This feels rude.
                     const moduleInfo = this.getModuleInfo(id);
                     moduleInfo.ast = this.parse(code);
-                    let filesToEmit = new Array();
-                    parseAddModuleOrNewWorker(moduleInfo.ast, (args) => {
+                    const filesToEmit = [];
+                    // Try to find potential expressions to replace.
+                    findWorkerChunkExpressions(moduleInfo.ast, (args) => {
+                        // We've found one, potentially. 
+                        // Make sure it's in the right format.
+                        // In particular, by being in the right format we're able to use the URL
+                        // as the ID of a new chunk for Rollup to start compiling.
                         const urlArg = args[0];
                         if (urlArg.type == "NewExpression" && urlArg.callee.type == "Identifier" && urlArg.callee.name == 'URL') {
                             let newExp = urlArg;
@@ -89,25 +85,27 @@ function chunkWorkersPlugin({ exclude, include } = {}) {
                                 let relDir = newExp.arguments[0];
                                 let meta = newExp.arguments[1];
                                 if (meta.object.type == "MetaProperty" && meta.property.type == "Identifier" && meta.property.name == "url") {
-                                    filesToEmit.push({
-                                        url: `${relDir.value}`,
-                                        urlStart: newExp.start,
-                                        urlEnd: newExp.end,
-                                    });
+                                    // Right format -- add it to the list of files to emit.
+                                    const url = `${relDir.value}`;
+                                    const replaceStart = newExp.start;
+                                    const replaceEnd = newExp.end;
+                                    filesToEmit.push({ url, replaceStart, replaceEnd });
                                 }
                             }
                         }
                     });
-                    filesToEmit.forEach(({ url, urlStart, urlEnd }) => {
+                    filesToEmit.forEach(({ replaceEnd: urlEnd, replaceStart: urlStart, url }) => {
+                        const fileName2 = transformPath(normalizePath(relative(projectDir, url)));
+                        // Duplicates calls to emitFile are fine, the documentation says so
                         const fileId = this.emitFile({
                             type: "chunk",
                             id: url,
-                            fileName: normalizePath(relative(projectDir, url)),
+                            fileName: fileName2,
                             importer: id
                         });
                         const fileName = this.getFileName(fileId);
                         if (urlStart && urlEnd)
-                            magicString.update(urlStart, urlEnd, JSON.stringify(normalizePath(fileName)));
+                            magicString.update(urlStart, urlEnd, `new URL(${JSON.stringify(fileName)}, import.meta.url)`);
                     });
                     return {
                         code: magicString.toString(),

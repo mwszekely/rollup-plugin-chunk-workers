@@ -1,11 +1,12 @@
 
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
+import * as path from "node:path";
 import { RollupOptions, rollup } from "rollup";
-import dataPlugin from "../dist/es/index.js";
+import chunkWorkers from "../dist/es/index.js";
 
+const extensions = [".js", ".jsx", ".ts", ".tsx"];
 (async () => {
-
     const opts = {
         input: "./src/index.ts",
         output: {
@@ -15,8 +16,10 @@ import dataPlugin from "../dist/es/index.js";
         },
         plugins: [
             (typescript as any)(),
-            nodeResolve(),
-            dataPlugin({})
+            (chunkWorkers as any)({
+                transformPath: (p: string) => path.parse(p).base
+            }),
+            nodeResolve({ extensions })
         ]
     } satisfies RollupOptions;
 
