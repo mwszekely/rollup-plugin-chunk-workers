@@ -3,8 +3,10 @@ import { Node } from "acorn";
 import { simple } from "acorn-walk";
 import { CallExpression, Expression, Identifier, Literal, MemberExpression, NewExpression, SpreadElement } from "estree";
 import MagicString from "magic-string";
-import { relative } from "path";
+import { isAbsolute, join, parse, relative } from "path";
 import { AstNode as AcornNode, InputPluginOption } from "rollup";
+
+export type WorkerChunkMode = "chunk" | "inline";
 
 export interface ChunkWorkersPluginOptions {
 
@@ -26,6 +28,14 @@ export interface ChunkWorkersPluginOptions {
      * E.G. `p => path.parse(p).base` will place everything in the build's root directory (with `import * as path from "node:path"`).
      */
     transformPath?: (normalizedPath: string) => string;
+
+    /**
+     * Provisional, please do not rely on this behavior:
+     * 
+     * * `"chunk"` (default): Workers are compiled as complete chunks, running all plugins on them as expected, and are referenced as a separate file URL.
+     * * `"inline"`: Includes the single file referenced as a string. Dependencies are not included -- it's more-or-less expected that the file is pre-compiled.
+     */
+    mode?: "chunk" | "inline" | ((id: string) => WorkerChunkMode);
 }
 
 const PLUGIN_NAME = "rollup-plugin-chunk-workers";
@@ -85,8 +95,13 @@ function findWorkerChunkExpressions(ast: AcornNode, callbackOnArgs: (args: (Expr
     })
 }
 
-export default function chunkWorkersPlugin({ exclude, include, transformPath }: Partial<ChunkWorkersPluginOptions> = {}): InputPluginOption {
+const MAGIC_PREFIX = `\0INLINE_WORKERS`;
 
+export default function chunkWorkersPlugin({ exclude, include, transformPath, mode: m }: Partial<ChunkWorkersPluginOptions> = {}): InputPluginOption {
+
+    m ??= "chunk";
+    let temp = 0;
+    let temp2 = new Map<string, string>();
     transformPath ??= _ => _;
 
     let projectDir = process.cwd();
@@ -94,7 +109,23 @@ export default function chunkWorkersPlugin({ exclude, include, transformPath }: 
 
     return {
         name: PLUGIN_NAME,
+        buildStart() {
+            temp = 0;
+            temp2 = new Map();
+        },
+        async resolveId(id) {
+            if (id.startsWith(MAGIC_PREFIX)) {
+                return id;
+            }
+        },
+        async load(id) {
+            if (id.startsWith(MAGIC_PREFIX)) {
+                return `const __inlined_worker_url = ${temp2.get(id.substring(MAGIC_PREFIX.length))};\nexport default __inlined_worker_url;`
+            }
+        },
         async transform(code, id) {
+
+            const mode = (m instanceof Function) ? m(id) : m;
 
             if (filter(id)) {
                 try {
@@ -102,8 +133,9 @@ export default function chunkWorkersPlugin({ exclude, include, transformPath }: 
 
                     // TODO: We need the AST...is this the best way to get it during the transform phase?
                     // This feels rude.
+                    // (Also we modify the code *after* generating the AST)
                     const moduleInfo = this.getModuleInfo(id)!;
-                    moduleInfo.ast = this.parse(code);
+                    moduleInfo.ast ||= this.parse(code);
 
                     const filesToEmit: { url: string, replaceStart: number, replaceEnd: number }[] = [];
 
@@ -135,21 +167,40 @@ export default function chunkWorkersPlugin({ exclude, include, transformPath }: 
                         }
                     });
 
-                    filesToEmit.forEach(({ replaceEnd: urlEnd, replaceStart: urlStart, url }) => {
+                    await Promise.all(filesToEmit.map(async ({ replaceEnd: urlEnd, replaceStart: urlStart, url }) => {
                         const fileName2 = transformPath!(normalizePath(relative(projectDir, url!)));
+                        if (mode == "chunk") {
 
-                        // Duplicates calls to emitFile are fine, the documentation says so
-                        const fileId = this.emitFile({
-                            type: "chunk",
-                            id: url!,
-                            fileName: fileName2,
-                            importer: id
-                        });
-                        const fileName = this.getFileName(fileId);
-                        if (urlStart && urlEnd)
-                            magicString.update(urlStart, urlEnd, `new URL(${JSON.stringify(fileName)}, import.meta.url)`);
+                            // Duplicates calls to emitFile are fine, the documentation says so
+                            const fileId = this.emitFile({
+                                type: "chunk",
+                                id: url!,
+                                fileName: fileName2,
+                                importer: id
+                            });
+                            const fileName = this.getFileName(fileId);
+                            if (urlStart && urlEnd) {
+                                magicString.update(urlStart, urlEnd, `new URL(${JSON.stringify(fileName)}, import.meta.url)`);
+                            }
 
-                    })
+                        }
+                        else {
+                            const parsedIdPath = parse(id);
+                            const importerPath = parsedIdPath.dir;
+                            const fullPath = normalizePath(isAbsolute(url) ? url : join(importerPath, url));
+                            const module = await this.load({ id: fullPath /*, resolveDependencies: true*/ }); // resolveDependencies just waits until dependency info is available -- it has no effect on module.code...
+                            if (urlStart && urlEnd && module.code) {
+                                // `URL.createObjectURL(new Blob([${JSON.stringify(module.code)}], { type: "application/javascript" }))`
+                                //const temp = temp2.size;
+                                const vid = `${MAGIC_PREFIX}${fullPath}`;
+                                temp2.set(fullPath, `URL.createObjectURL(new Blob([${JSON.stringify(module.code)}], { type: "application/javascript" }))`);
+                                magicString.prepend(`import __inlined_worker_url_${temp} from ${JSON.stringify(vid)};\n`);
+                                magicString.update(urlStart, urlEnd, `__inlined_worker_url_${temp}`);
+                                ++temp;
+                            }
+                        }
+                    }))
+
                     return {
                         code: magicString.toString(),
                         map: magicString.generateMap({ hires: true })

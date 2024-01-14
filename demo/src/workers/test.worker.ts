@@ -6,7 +6,7 @@ const { Foo } = expose2(
     {
         Foo: class Foo {
             bar() {
-                return 4;
+                return 4 as 5;
             }
         }
     }

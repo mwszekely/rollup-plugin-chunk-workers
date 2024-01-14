@@ -1,6 +1,6 @@
 # rollup-plugin-chunk-workers
 
-🍣 A Rollup plugin that will take an expression such as `new Worker(...)` and `[worklet].addModule(...)` and bundle that into a separate chunk whose URL is referenced instead, including all of its dependencies as a separate chunk would.
+🍣 A Rollup plugin that will take an expression such as `new Worker(...)` or `[worklet].addModule(...)` and bundle that into a separate chunk whose URL is referenced instead, including all of its dependencies as a separate chunk would.
 
 When using Typescript, as usual you'll probably want to use paths like `"./worker.js"` instead of ~~`"./worker.ts"`~~, unless you wanted your generated chunk's filename to end with `.ts` (which is fine, and can be mitigated with the `transformPath` option).
 
@@ -9,14 +9,14 @@ When using Typescript, as usual you'll probably want to use paths like `"./worke
 Transformations are applied by analyzing the source code's AST.
 
 **Supported transformations**:
-* `new Worker(new URL("StringLiteral", import.meta.url), ...)`
-* `[ctx.]audioWorklet.addModule(new URL("StringLiteral", import.meta.url), ...)`
-* `[CSS.]paintWorklet.addModule(new URL("StringLiteral", import.meta.url), ...)`
-* `[navigator.]serviceWorker.register(new URL("StringLiteral", import.meta.url), ...)`
+* `new Worker(new URL("PathToWorker", import.meta.url), ...)`
+* `[ctx.]audioWorklet.addModule(new URL("PathToWorklet", import.meta.url), ...)`
+* `[CSS.]paintWorklet.addModule(new URL("PathToWorklet", import.meta.url), ...)`
+* `[navigator.]serviceWorker.register(new URL("PathToWorker", import.meta.url), ...)`
 
 **Unsupported transformations**:
 * Intentionally, anything within a comment, string, etc. won't transform (e.g. `/* new Worker(...)  */`, `eval("new Worker(...)")`, etc.)
-* Intentionally, `new Worker("StringLiteral")`, so that the semantic differences between *relative URLs* and *relative filepaths* don't cause problems.
+* Intentionally, `new Worker("PathToWorker")` won't transform so that the semantic differences between *relative URLs* and *relative filepaths* don't cause problems.
 * The path must be inline, this will not work: `const path = "./worker.js"; new Worker(new URL(path, import.meta.url));`
 * `Worker` must not be qualified, this will also fail: `new globalThis.Worker(...)`
 * Globals can't be renamed, as in: `const pw = CSS.paintWorklet; pw.addModule(...)`
@@ -28,13 +28,15 @@ Transformations are applied by analyzing the source code's AST.
 
 ## Why not something more fun, like `import { func } from "worker:./w.js"`
 
-Mostly because the Typescript declaration files that can describe what `worker:*` is can't actually describe what individual `worker:w.js` file are, or really anything complicated enough to infer what `func` would be.
+Mostly because while Typescript declaration files can describe what general `worker:*` files are, they can't actually describe what **individual** `worker:w.js` file are, or really anything complicated enough to auto-infer what `func` could be (once there's that `worker:` prefix in there).
 
 Typescript itself can, though, so if you stick to just normal behavior with (e.g. using Comlink) `wrap<Remote<typeof import("./w.js")>>(new Worker("./w.js"))`, it all works as expected. Feels better to just not fight against the current here, honestly.
 
-## Inlining workers as Data URIs?
+## Inlining workers into one file?
 
-I'm not sure if this is possible at the moment, as I haven't found a way to get Rollup to replace a chunk with a Data URI under normal circumstances, and chunks are the only kind of file emit that will follow `import`s all the way down.
+While not ideal, assuming you have a pre-compiled worker, the `mode` option can be set to `"inline"` to embed the worker in the same file. **No dependencies are resolved this way** (though plugins are), so it may require a separate build step &mdash; one to build the main and worker scripts, another to inline them together. 
+
+Hopefully this will change in the future.
 
 ## Requirements
 
