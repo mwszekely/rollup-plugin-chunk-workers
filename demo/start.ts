@@ -3,6 +3,8 @@ import { nodeResolve } from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 import * as path from "node:path";
 import { RollupOptions, rollup } from "rollup";
+
+/// @ts-ignore-error
 import chunkWorkers from "../dist/es/index.js";
 
 const extensions = [".js", ".jsx", ".ts", ".tsx"];

@@ -56,41 +56,50 @@ function findWorkerChunkExpressions(ast, callbackOnArgs) {
     });
 }
 const MAGIC_PREFIX = `\0INLINE_WORKERS`;
-function chunkWorkersPlugin({ exclude, include, transformPath, mode: m } = {}) {
-    m !== null && m !== void 0 ? m : (m = "chunk");
-    let temp = 0;
-    let temp2 = new Map();
+function chunkWorkersPlugin({ exclude, include, transformPath, mode: mode2 } = {}) {
+    // Default settings
+    mode2 !== null && mode2 !== void 0 ? mode2 : (mode2 = "chunk");
     transformPath !== null && transformPath !== void 0 ? transformPath : (transformPath = _ => _);
+    // Only used for inline mode, so maybe we won't need these eventually.
+    let inlineSynthFileCount;
+    let inlineSynthFileMappings;
     let projectDir = process.cwd();
     const filter = createFilter(include, exclude);
     return {
         name: PLUGIN_NAME,
         buildStart() {
-            temp = 0;
-            temp2 = new Map();
+            // These could maybe be in `options()` instead? Dunno.
+            // `buildStart` happens right after `options`, 
+            // which happens during every new compilation (including in watch mode)
+            inlineSynthFileCount = 0;
+            inlineSynthFileMappings = new Map();
         },
         async resolveId(id) {
+            // Only used in inline mode
             if (id.startsWith(MAGIC_PREFIX)) {
                 return id;
             }
         },
         async load(id) {
             if (id.startsWith(MAGIC_PREFIX)) {
-                return `const __inlined_worker_url = ${temp2.get(id.substring(MAGIC_PREFIX.length))};\nexport default __inlined_worker_url;`;
+                // TODO: Is this better than just `export const __inlined_worker_url = ...`?
+                return `const __inlined_worker_url = ${inlineSynthFileMappings.get(id.substring(MAGIC_PREFIX.length))};\nexport default __inlined_worker_url;`;
             }
         },
         async transform(code, id) {
-            const mode = (m instanceof Function) ? m(id) : m;
+            const mode = (mode2 instanceof Function) ? mode2(id) : mode2;
             if (filter(id)) {
                 try {
                     let magicString = new MagicString(code);
+                    // Step 0: Get the AST so we can look for worker instantiations.
+                    // 
                     // TODO: We need the AST...is this the best way to get it during the transform phase?
                     // This feels rude.
                     // (Also we modify the code *after* generating the AST)
                     const moduleInfo = this.getModuleInfo(id);
                     moduleInfo.ast || (moduleInfo.ast = this.parse(code));
+                    // Step 1: Find all the Worker instantiations in this chunk.
                     const filesToEmit = [];
-                    // Try to find potential expressions to replace.
                     findWorkerChunkExpressions(moduleInfo.ast, (args) => {
                         // We've found one, potentially. 
                         // Make sure it's in the right format.
@@ -114,6 +123,7 @@ function chunkWorkersPlugin({ exclude, include, transformPath, mode: m } = {}) {
                             }
                         }
                     });
+                    // Step 2: Render all the files that are referenced by `Worker` instantiations.
                     await Promise.all(filesToEmit.map(async ({ replaceEnd: urlEnd, replaceStart: urlStart, url }) => {
                         const fileName2 = transformPath(normalizePath(relative(projectDir, url)));
                         if (mode == "chunk") {
@@ -138,10 +148,10 @@ function chunkWorkersPlugin({ exclude, include, transformPath, mode: m } = {}) {
                                 // `URL.createObjectURL(new Blob([${JSON.stringify(module.code)}], { type: "application/javascript" }))`
                                 //const temp = temp2.size;
                                 const vid = `${MAGIC_PREFIX}${fullPath}`;
-                                temp2.set(fullPath, `URL.createObjectURL(new Blob([${JSON.stringify(module.code)}], { type: "application/javascript" }))`);
-                                magicString.prepend(`import __inlined_worker_url_${temp} from ${JSON.stringify(vid)};\n`);
-                                magicString.update(urlStart, urlEnd, `__inlined_worker_url_${temp}`);
-                                ++temp;
+                                inlineSynthFileMappings.set(fullPath, `URL.createObjectURL(new Blob([${JSON.stringify(module.code)}], { type: "application/javascript" }))`);
+                                magicString.prepend(`import __inlined_worker_url_${inlineSynthFileCount} from ${JSON.stringify(vid)};\n`);
+                                magicString.update(urlStart, urlEnd, `__inlined_worker_url_${inlineSynthFileCount}`);
+                                ++inlineSynthFileCount;
                             }
                         }
                     }));
@@ -152,6 +162,9 @@ function chunkWorkersPlugin({ exclude, include, transformPath, mode: m } = {}) {
                 }
                 catch (ex) {
                     // Assume this wasn't a module meant for us
+                    //
+                    // TODO: I mean, ***I GUESS*** this is fine, but
+                    // there's gotta be a better way. This sucks.
                 }
             }
         },

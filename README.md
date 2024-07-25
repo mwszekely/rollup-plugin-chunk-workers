@@ -34,7 +34,7 @@ Typescript itself can, though, so if you stick to just normal behavior with (e.g
 
 ## Inlining workers into one file?
 
-While not ideal, assuming you have a pre-compiled worker, the `mode` option can be set to `"inline"` to embed the worker in the same file. **No dependencies are resolved this way** (though plugins are), so it may require a separate build step &mdash; one to build the main and worker scripts, another to inline them together. 
+While not an ideal solution, assuming you have a ***pre-compiled*** worker, the `mode` option can be set to `"inline"` to embed the worker in the same file. **No dependencies are resolved this way** (though plugins are), so it may require a separate build step &mdash; one to build the main and worker scripts, another to inline them together. 
 
 Hopefully this will change in the future.
 

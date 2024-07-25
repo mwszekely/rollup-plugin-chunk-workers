@@ -3,11 +3,11 @@ import { InputPluginOption } from "rollup";
 export type WorkerChunkMode = "chunk" | "inline";
 export interface ChunkWorkersPluginOptions {
     /**
-     * Standard Rollup `include` pattern; applies to the string in `new URL("./worker.js")`.
+     * Standard Rollup `include` pattern; these files will be searched for `Workers` to compile.
      */
     include?: FilterPattern;
     /**
-     * Standard Rollup `exclude` pattern; applies to the string in `new URL("./worker.js")`.
+     * Standard Rollup `exclude` pattern; these files will be not searched for `Workers` to compile.
      */
     exclude?: FilterPattern;
     /**
@@ -26,5 +26,5 @@ export interface ChunkWorkersPluginOptions {
      */
     mode?: "chunk" | "inline" | ((id: string) => WorkerChunkMode);
 }
-export default function chunkWorkersPlugin({ exclude, include, transformPath, mode: m }?: Partial<ChunkWorkersPluginOptions>): InputPluginOption;
+export default function chunkWorkersPlugin({ exclude, include, transformPath, mode: mode2 }?: Partial<ChunkWorkersPluginOptions>): InputPluginOption;
 export { chunkWorkersPlugin };

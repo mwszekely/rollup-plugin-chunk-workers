@@ -7,7 +7,7 @@
   "types": "./types/index.d.ts",
   "type": "commonjs",
   "exports": {
-    "types": "./types/index.d.ts",
+    "types": "./dist/es/index.d.ts",
     "import": "./dist/es/index.js",
     "default": "./dist/cjs/index.js"
   },
@@ -43,9 +43,11 @@
     "@types/node": "^20.11.0",
     "@types/picomatch": "^2.3.3",
     "acorn": "^8.11.3",
+    "del-cli": "^5.1.0",
     "rollup": "^4.9.4",
     "serve": "^14.2.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
-  }
+    "typescript": "^5.5.4"
+  },
+  "packageManager": "pnpm@9.4.0+sha512.f549b8a52c9d2b8536762f99c0722205efc5af913e77835dbccc3b0b0b2ca9e7dc8022b78062c17291c48e88749c70ce88eb5a74f1fa8c4bf5e18bb46c8bd83a"
 }
