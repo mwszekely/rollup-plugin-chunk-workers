@@ -24,19 +24,30 @@ Transformations are applied by analyzing the source code's AST.
 ## Use-case of this plugin: 
 
 * You want to automatically compile the script a `Worker` or `Worklet` loads (e.g. loading a `Worklet` written in Typescript)
-* You want scripts loaded by a `Worker` or `Worklet` to be in a separate chunk
+* You want scripts loaded by a `Worker` or `Worklet` to be in a separate chunk without a separate build step.<br>---OR---<br>
+* You want scripts loaded by a `Worker` or `Worklet` to be inlined as a string in the same chunk, even if it requires a separate build step.
 
 ## Why not something more fun, like `import { func } from "worker:./w.js"`
 
-Mostly because while Typescript declaration files can describe what general `worker:*` files are, they can't actually describe what **individual** `worker:w.js` file are, or really anything complicated enough to auto-infer what `func` could be (once there's that `worker:` prefix in there).
+Mostly because while Typescript *declaration files* can describe what general `worker:*` files are, they can't actually describe what **individual** `worker:w.js` file are, or really anything complicated enough to auto-infer what `func` could be (once there's that `worker:` prefix in there).
 
-Typescript itself can, though, so if you stick to just normal behavior with (e.g. using Comlink) `wrap<Remote<typeof import("./w.js")>>(new Worker("./w.js"))`, it all works as expected. Feels better to just not fight against the current here, honestly.
+Typescript can describe those individual files *without* the prefix, though, so if you stick to just normal behavior with (e.g. using Comlink) `wrap<Remote<typeof import("./w.js")>>(new Worker("./w.js"))`, it all works as expected. Feels better to just not fight against the current here, honestly.
 
 ## Inlining workers into one file?
 
 While not an ideal solution, assuming you have a ***pre-compiled*** worker, the `mode` option can be set to `"inline"` to embed the worker in the same file. **No dependencies are resolved this way** (though plugins are), so it may require a separate build step &mdash; one to build the main and worker scripts, another to inline them together. 
 
 Hopefully this will change in the future.
+
+## How does it work?
+
+1. Scan the AST for patterns like `new Worker`, and grab the filepath it references
+2. Call [`this.emitFile`](https://rollupjs.org/plugin-development/#this-emitfile) (with `type: "chunk"`) for each path.
+3. Rewrite the `new Worker` call to reference the newly-created module.
+
+However, in `inline` mode, step 2 is different:
+
+2. Emit a "virtual module" for each path that just exports a raw string that comes from [`this.load(path)`](https://rollupjs.org/plugin-development/#this-load). Unfortunately, `this.load` does not resolve dependencies into `module.code` even if `resolveDependencies` is `true`, which is the reason for this mode's biggest restriction.
 
 ## Requirements
 
